@@ -75,7 +75,8 @@ def parse(text: str, side: str = "front") -> dict:
     # Aadhaar
     aadh = re.sub(r"\s","",t)
     am = re.search(r"\d{12}", aadh)
-    aadhaar = f"{am.group()[:4]} {am.group()[4:8]} {am.group()[8:]}" if am else ""
+# Mask deterministically — store only last 4 (Aadhaar Act compliance)
+    aadhaar = f"XXXX XXXX {am.group()[8:]}" if am else ""
 
     # DL
     dm = (re.search(r"[A-Z]{2}[\s\-]?\d{2}[\s\-]?\d{4}[\s\-]?\d{7}",t,re.I)
