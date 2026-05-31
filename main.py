@@ -116,15 +116,29 @@ def parse(text: str, side: str = "front") -> dict:
     phm = re.search(r"\b([6-9]\d{9})\b",t)
     if phm: phone = phm.group(1)
 
-    # Address (back side)
+ # Address (back side) — anchor on English "Address:" label, keep clean English only
     address = ""
     if side == "back":
-        adm = re.search(r"(?:Address|पता|S\/O|D\/O|W\/O|C\/O)[:\s]+(.+)",t,re.I|re.DOTALL)
-        if adm:
-            address = adm.group(1).replace("\n"," ").strip()[:250]
-        else:
-            al = [l for l in lines[-6:] if not re.match(r"^\d{4}\s\d{4}\s\d{4}$",l) and len(l)>5]
-            if len(al)>=2: address = ", ".join(al)[:250]
+        # find the English "Address:" marker and take text after it
+        adm = re.search(r"Address[:\s]+(.+)", t, re.I | re.DOTALL)
+        candidate = adm.group(1) if adm else t
+        clean_parts = []
+        for raw_line in candidate.split("\n"):
+            line = raw_line.strip().strip(",")
+            if len(re.sub(r"[^A-Za-z0-9]", "", line)) < 2:
+                continue
+            normal = re.sub(r"[^A-Za-z0-9 ,\-/]", "", line).strip()
+            # keep only if line is mostly clean characters (drops Tamil garble)
+            if len(normal) / max(len(line), 1) < 0.75:
+                continue
+            if re.search(r"INDIA|GOVT|GOVERNMENT|UIDAI|AUTHORITY|AADHAAR|www|help@|P\.?O\.?\s*Box|1947", line, re.I):
+                continue
+            clean_parts.append(normal)
+        address = ", ".join(clean_parts)[:250]
+        # ensure pincode is included
+        pin = re.search(r"\b(\d{6})\b", t)
+        if pin and pin.group(1) not in address:
+            address = (address.rstrip(", ") + ", " + pin.group(1)).strip(", ")
     # Father
     father = ""
     fm = re.search(r"(?:S\/O|D\/O|W\/O|Father|Husband)[:\s]+([A-Za-z\s]{3,40})",t,re.I)
