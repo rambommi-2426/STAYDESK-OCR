@@ -125,7 +125,6 @@ def parse(text: str, side: str = "front") -> dict:
         else:
             al = [l for l in lines[-6:] if not re.match(r"^\d{4}\s\d{4}\s\d{4}$",l) and len(l)>5]
             if len(al)>=2: address = ", ".join(al)[:250]
-
     # Father
     father = ""
     fm = re.search(r"(?:S\/O|D\/O|W\/O|Father|Husband)[:\s]+([A-Za-z\s]{3,40})",t,re.I)
