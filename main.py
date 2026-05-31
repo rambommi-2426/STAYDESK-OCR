@@ -28,13 +28,9 @@ def preprocess(img: Image.Image) -> Image.Image:
 def ocr(img: Image.Image) -> str:
     import pytesseract
     clean = preprocess(img)
-    # Try with Indian language support first
-    try:
-        text = pytesseract.image_to_string(clean, lang="eng+hin", config="--oem 3 --psm 3")
-        if len(text.strip()) > 20:
-            return text
-    except Exception:
-        pass
+ clean = preprocess(img)
+    # English only — every Indian ID prints details in English alongside the
+    # local script, so eng works nationwide and avoids garbled mixed-script text.
     return pytesseract.image_to_string(clean, lang="eng", config="--oem 3 --psm 3")
 
 
