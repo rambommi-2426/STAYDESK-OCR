@@ -13,22 +13,36 @@ app = FastAPI(title="StayDesk OCR", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-def preprocess(img: Image.Image) -> Image.Image:
-    """Sharpen and increase contrast for better OCR accuracy."""
-    img = img.convert("L")                          # greyscale
-    img = img.filter(ImageFilter.SHARPEN)
-    img = ImageEnhance.Contrast(img).enhance(2.0)
-    # Upscale small images
-    w, h = img.size
-    if w < 1000:
-        img = img.resize((w*2, h*2), Image.LANCZOS)
-    return img
-
+def keep_english_only(text: str) -> str:
+    """Remove non-Latin script (Tamil, Hindi, etc.) and obvious OCR garble.
+    Language-agnostic: keeps only clean English words, numbers, basic punctuation."""
+    cleaned_lines = []
+    for raw in text.split("\n"):
+        # 1. strip anything that isn't basic Latin / digits / common punctuation
+        line = re.sub(r"[^A-Za-z0-9 ,.\-/:]", "", raw).strip()
+        if not line:
+            continue
+        # 2. drop garbled tokens: keep words that look like real english/numbers
+        good = []
+        for tok in line.split():
+            if re.fullmatch(r"\d[\d,\-/]*", tok):          # numbers, pincodes
+                good.append(tok)
+            elif re.fullmatch(r"[A-Za-z][a-z]{1,}", tok):   # normal Capitalised/lowercase word
+                good.append(tok)
+            elif re.fullmatch(r"[A-Z]{2,}", tok) and len(tok) <= 6:  # short all-caps (S/O, names)
+                good.append(tok)
+            elif "/" in tok:                                 # S/O, D/O
+                good.append(tok)
+        if good:
+            cleaned_lines.append(" ".join(good))
+    return "\n".join(cleaned_lines)
 
 def ocr(img: Image.Image) -> str:
     import pytesseract
     clean = preprocess(img)
-    return pytesseract.image_to_string(clean, lang="eng", config="--oem 3 --psm 3")
+    text = pytesseract.image_to_string(clean, lang="eng", config="--oem 3 --psm 3")
+    return keep_english_only(text)
+
 def read_qr(img: Image.Image) -> Optional[dict]:
     try:
         from pyzbar.pyzbar import decode
