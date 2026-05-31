@@ -28,12 +28,7 @@ def preprocess(img: Image.Image) -> Image.Image:
 def ocr(img: Image.Image) -> str:
     import pytesseract
     clean = preprocess(img)
- clean = preprocess(img)
-    # English only — every Indian ID prints details in English alongside the
-    # local script, so eng works nationwide and avoids garbled mixed-script text.
     return pytesseract.image_to_string(clean, lang="eng", config="--oem 3 --psm 3")
-
-
 def read_qr(img: Image.Image) -> Optional[dict]:
     try:
         from pyzbar.pyzbar import decode
