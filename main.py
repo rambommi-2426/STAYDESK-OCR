@@ -13,35 +13,46 @@ app = FastAPI(title="StayDesk OCR", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
+def preprocess(img: Image.Image) -> Image.Image:
+    """Sharpen and increase contrast for better OCR accuracy."""
+    img = img.convert("L")                          # greyscale
+    img = img.filter(ImageFilter.SHARPEN)
+    img = ImageEnhance.Contrast(img).enhance(2.0)
+    w, h = img.size
+    if w < 1000:
+        img = img.resize((w * 2, h * 2), Image.LANCZOS)
+    return img
+
+
 def keep_english_only(text: str) -> str:
     """Remove non-Latin script (Tamil, Hindi, etc.) and obvious OCR garble.
     Language-agnostic: keeps only clean English words, numbers, basic punctuation."""
     cleaned_lines = []
     for raw in text.split("\n"):
-        # 1. strip anything that isn't basic Latin / digits / common punctuation
         line = re.sub(r"[^A-Za-z0-9 ,.\-/:]", "", raw).strip()
         if not line:
             continue
-        # 2. drop garbled tokens: keep words that look like real english/numbers
         good = []
         for tok in line.split():
-            if re.fullmatch(r"\d[\d,\-/]*", tok):          # numbers, pincodes
+            if re.fullmatch(r"\d[\d,\-/]*", tok):                    # numbers, pincodes
                 good.append(tok)
-            elif re.fullmatch(r"[A-Za-z][a-z]{1,}", tok):   # normal Capitalised/lowercase word
+            elif re.fullmatch(r"[A-Za-z][a-z]{1,}", tok):            # normal words
                 good.append(tok)
-            elif re.fullmatch(r"[A-Z]{2,}", tok) and len(tok) <= 6:  # short all-caps (S/O, names)
+            elif re.fullmatch(r"[A-Z]{2,}", tok) and len(tok) <= 6:  # short all-caps
                 good.append(tok)
-            elif "/" in tok:                                 # S/O, D/O
+            elif "/" in tok:                                          # S/O, D/O
                 good.append(tok)
         if good:
             cleaned_lines.append(" ".join(good))
     return "\n".join(cleaned_lines)
+
 
 def ocr(img: Image.Image) -> str:
     import pytesseract
     clean = preprocess(img)
     text = pytesseract.image_to_string(clean, lang="eng", config="--oem 3 --psm 3")
     return keep_english_only(text)
+
 
 def read_qr(img: Image.Image) -> Optional[dict]:
     try:
@@ -54,26 +65,29 @@ def read_qr(img: Image.Image) -> Optional[dict]:
                 uid  = root.find("UidData") or root
                 poi  = uid.find("Poi") or {}
                 poa  = uid.find("Poa") or {}
-                g    = lambda el,a: el.get(a,"") if hasattr(el,"get") else ""
-                name = g(poi,"name") or g(uid,"name")
-                if not name: continue
-                addr = ", ".join(filter(None,[
-                    g(poa,"house"), g(poa,"street"), g(poa,"loc"),
-                    g(poa,"dist"), g(poa,"state"), g(poa,"pc")]))
-                return {"source":"Aadhaar QR","name":name,"dob":g(poi,"dob"),
-                    "gender":"Male" if g(poi,"gender")=="M" else "Female" if g(poi,"gender")=="F" else "",
-                    "address":addr,"phone":g(poi,"phone"),
-                    "idType":"Aadhaar","idNumber":"","fatherName":""}
+                g    = lambda el, a: el.get(a, "") if hasattr(el, "get") else ""
+                name = g(poi, "name") or g(uid, "name")
+                if not name:
+                    continue
+                addr = ", ".join(filter(None, [
+                    g(poa, "house"), g(poa, "street"), g(poa, "loc"),
+                    g(poa, "dist"), g(poa, "state"), g(poa, "pc")]))
+                return {"source": "Aadhaar QR", "name": name, "dob": g(poi, "dob"),
+                    "gender": "Male" if g(poi, "gender") == "M" else "Female" if g(poi, "gender") == "F" else "",
+                    "address": addr, "phone": g(poi, "phone"),
+                    "idType": "Aadhaar", "idNumber": "", "fatherName": ""}
             except ET.ParseError:
                 try:
                     d = json.loads(raw)
                     if d.get("name"):
-                        return {"source":"Aadhaar QR","name":d.get("name",""),
-                            "dob":d.get("dob",""),"gender":d.get("gender",""),
-                            "address":d.get("address",""),"phone":d.get("mobile",""),
-                            "idType":"Aadhaar","idNumber":"","fatherName":d.get("father","")}
-                except: pass
-    except: pass
+                        return {"source": "Aadhaar QR", "name": d.get("name", ""),
+                            "dob": d.get("dob", ""), "gender": d.get("gender", ""),
+                            "address": d.get("address", ""), "phone": d.get("mobile", ""),
+                            "idType": "Aadhaar", "idNumber": "", "fatherName": d.get("father", "")}
+                except:
+                    pass
+    except:
+        pass
     return None
 
 
@@ -81,16 +95,15 @@ def parse(text: str, side: str = "front") -> dict:
     t = text
     lines = [l.strip() for l in t.split("\n") if l.strip()]
 
-    # Aadhaar
-    aadh = re.sub(r"\s","",t)
+    # Aadhaar — mask deterministically, store only last 4 (Aadhaar Act compliance)
+    aadh = re.sub(r"\s", "", t)
     am = re.search(r"\d{12}", aadh)
-# Mask deterministically — store only last 4 (Aadhaar Act compliance)
     aadhaar = f"XXXX XXXX {am.group()[8:]}" if am else ""
 
     # DL
-    dm = (re.search(r"[A-Z]{2}[\s\-]?\d{2}[\s\-]?\d{4}[\s\-]?\d{7}",t,re.I)
-          or re.search(r"[A-Z]{2}\d{13}",t,re.I))
-    dl = re.sub(r"\s","",dm.group()).upper() if dm else ""
+    dm = (re.search(r"[A-Z]{2}[\s\-]?\d{2}[\s\-]?\d{4}[\s\-]?\d{7}", t, re.I)
+          or re.search(r"[A-Z]{2}\d{13}", t, re.I))
+    dl = re.sub(r"\s", "", dm.group()).upper() if dm else ""
 
     # PAN
     pm = re.search(r"[A-Z]{5}\d{4}[A-Z]", t)
@@ -101,39 +114,42 @@ def parse(text: str, side: str = "front") -> dict:
 
     # DOB
     dob = ""
-    dm2 = (re.search(r"(?:DOB|D\.O\.B|Date\s+of\s+Birth)[:\s]+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})",t,re.I)
-           or re.search(r"\b(\d{2}[\/\-]\d{2}[\/\-]\d{4})\b",t))
+    dm2 = (re.search(r"(?:DOB|D\.O\.B|Date\s+of\s+Birth)[:\s]+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})", t, re.I)
+           or re.search(r"\b(\d{2}[\/\-]\d{2}[\/\-]\d{4})\b", t))
     if dm2:
         p = re.split(r"[\/\-]", dm2.group(1))
-        if len(p)==3 and len(p[2])==4 and int(p[0])<=31:
+        if len(p) == 3 and len(p[2]) == 4 and int(p[0]) <= 31:
             dob = f"{p[0].zfill(2)}/{p[1].zfill(2)}/{p[2]}"
 
     # Gender
     gender = ""
-    if re.search(r"\bMALE\b|\bMale\b",t): gender = "Male"
-    elif re.search(r"\bFEMALE\b|\bFemale\b",t): gender = "Female"
+    if re.search(r"\bMALE\b|\bMale\b", t):
+        gender = "Male"
+    elif re.search(r"\bFEMALE\b|\bFemale\b", t):
+        gender = "Female"
 
     # Name
     name = ""
-    nm = re.search(r"(?:Name|नाम)[:\s]+([A-Z][a-zA-Z\s]{3,40})",t)
+    nm = re.search(r"(?:Name)[:\s]+([A-Z][a-zA-Z\s]{3,40})", t)
     if nm:
         name = nm.group(1).strip()
     else:
         for line in lines:
-            if (re.match(r"^[A-Z][A-Z\s]{4,35}$",line)
-                and not re.search(r"INDIA|GOVT|GOVERNMENT|UIDAI|AUTHORITY|DRIVING|LICENCE|AADHAAR|MALE|FEMALE|REPUBLIC|ELECTION",line,re.I)
+            if (re.match(r"^[A-Z][A-Z\s]{4,35}$", line)
+                and not re.search(r"INDIA|GOVT|GOVERNMENT|UIDAI|AUTHORITY|DRIVING|LICENCE|AADHAAR|MALE|FEMALE|REPUBLIC|ELECTION", line, re.I)
                 and 2 <= len(line.split()) <= 5):
-                name = line; break
+                name = line
+                break
 
     # Phone
     phone = ""
-    phm = re.search(r"\b([6-9]\d{9})\b",t)
-    if phm: phone = phm.group(1)
+    phm = re.search(r"\b([6-9]\d{9})\b", t)
+    if phm:
+        phone = phm.group(1)
 
- # Address (back side) — anchor on English "Address:" label, keep clean English only
+    # Address (back side) — anchor on English "Address:" label, keep clean English only
     address = ""
     if side == "back":
-        # find the English "Address:" marker and take text after it
         adm = re.search(r"Address[:\s]+(.+)", t, re.I | re.DOTALL)
         candidate = adm.group(1) if adm else t
         clean_parts = []
@@ -142,29 +158,29 @@ def parse(text: str, side: str = "front") -> dict:
             if len(re.sub(r"[^A-Za-z0-9]", "", line)) < 2:
                 continue
             normal = re.sub(r"[^A-Za-z0-9 ,\-/]", "", line).strip()
-            # keep only if line is mostly clean characters (drops Tamil garble)
             if len(normal) / max(len(line), 1) < 0.75:
                 continue
             if re.search(r"INDIA|GOVT|GOVERNMENT|UIDAI|AUTHORITY|AADHAAR|www|help@|P\.?O\.?\s*Box|1947", line, re.I):
                 continue
             clean_parts.append(normal)
         address = ", ".join(clean_parts)[:250]
-        # ensure pincode is included
         pin = re.search(r"\b(\d{6})\b", t)
         if pin and pin.group(1) not in address:
             address = (address.rstrip(", ") + ", " + pin.group(1)).strip(", ")
+
     # Father
     father = ""
-    fm = re.search(r"(?:S\/O|D\/O|W\/O|Father|Husband)[:\s]+([A-Za-z\s]{3,40})",t,re.I)
-    if fm: father = fm.group(1).strip()
+    fm = re.search(r"(?:S\/O|D\/O|W\/O|Father|Husband)[:\s]+([A-Za-z\s]{3,40})", t, re.I)
+    if fm:
+        father = fm.group(1).strip()
 
-    return {"name":name,"dob":dob,"gender":gender,"idType":id_type,
-            "idNumber":id_num,"address":address,"phone":phone,"fatherName":father}
+    return {"name": name, "dob": dob, "gender": gender, "idType": id_type,
+            "idNumber": id_num, "address": address, "phone": phone, "fatherName": father}
 
 
 @app.get("/")
 def health():
-    return {"status":"ok","service":"StayDesk OCR","engine":"Tesseract","version":"3.0"}
+    return {"status": "ok", "service": "StayDesk OCR", "engine": "Tesseract", "version": "3.0"}
 
 
 @app.post("/ocr/id")
@@ -186,7 +202,7 @@ async def ocr_id(
             if not qr:
                 qr = read_qr(back_img)
         if qr:
-            return JSONResponse({"ok":True, **qr})
+            return JSONResponse({"ok": True, **qr})
 
         # OCR
         front_text = ocr(front_img)
@@ -197,17 +213,17 @@ async def ocr_id(
             back_data = parse(back_text, "back")
 
         merged = {
-            "name":       front_data.get("name")       or back_data.get("name",""),
-            "dob":        front_data.get("dob")        or back_data.get("dob",""),
-            "gender":     front_data.get("gender")     or back_data.get("gender",""),
-            "idType":     front_data.get("idType")     or back_data.get("idType",""),
-            "idNumber":   front_data.get("idNumber")   or back_data.get("idNumber",""),
-            "phone":      front_data.get("phone")      or back_data.get("phone",""),
-            "fatherName": front_data.get("fatherName") or back_data.get("fatherName",""),
-            "address":    back_data.get("address")     or front_data.get("address",""),
+            "name":       front_data.get("name")       or back_data.get("name", ""),
+            "dob":        front_data.get("dob")        or back_data.get("dob", ""),
+            "gender":     front_data.get("gender")     or back_data.get("gender", ""),
+            "idType":     front_data.get("idType")     or back_data.get("idType", ""),
+            "idNumber":   front_data.get("idNumber")   or back_data.get("idNumber", ""),
+            "phone":      front_data.get("phone")      or back_data.get("phone", ""),
+            "fatherName": front_data.get("fatherName") or back_data.get("fatherName", ""),
+            "address":    back_data.get("address")     or front_data.get("address", ""),
             "source":     "Tesseract",
         }
-        return JSONResponse({"ok":True, **merged})
+        return JSONResponse({"ok": True, **merged})
 
     except Exception as e:
         traceback.print_exc()
@@ -220,7 +236,7 @@ async def ocr_qr(image: UploadFile = File(...)):
         img = Image.open(io.BytesIO(await image.read())).convert("RGB")
         result = read_qr(img)
         if result:
-            return JSONResponse({"ok":True, **result})
-        return JSONResponse({"ok":False,"message":"No QR code found"})
+            return JSONResponse({"ok": True, **result})
+        return JSONResponse({"ok": False, "message": "No QR code found"})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
